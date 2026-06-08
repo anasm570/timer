@@ -1,4 +1,6 @@
-import { kv } from '@vercel/kv';
+// تخزين مؤقت في الذاكرة (يُفقد عند إعادة تشغيل الدالة)
+// هذا الحل مناسب للاختبار، لكنه ليس دائمًا بين عمليات النشر المتعددة
+const rooms = new Map();
 
 function randomTarget() {
     return Math.random() * 8 + 3; // 3.0 - 11.0
@@ -33,6 +35,7 @@ function endRoundIfNeeded(state) {
 }
 
 export default async function handler(req, res) {
+    // السماح بـ CORS (ضروري لبعض البيئات)
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', 'application/json');
     
@@ -47,19 +50,15 @@ export default async function handler(req, res) {
             case 'create': {
                 const { roomId: rid } = req.body;
                 if (!rid) return res.status(400).json({ error: 'roomId مطلوب' });
-                const existing = await kv.get(`room:${rid}`);
-                if (existing) {
+                if (rooms.has(rid)) {
                     return res.json({ success: false, error: 'الغرفة موجودة بالفعل' });
                 }
-                const newRoom = newGameState(rid);
-                // نضع الغرفة مع صلاحية ساعة واحدة (3600 ثانية)
-                await kv.set(`room:${rid}`, newRoom, { ex: 3600 });
+                rooms.set(rid, newGameState(rid));
                 return res.json({ success: true });
             }
             
             case 'join': {
-                const state = await kv.get(`room:${roomId}`);
-                if (!state) {
+                if (!rooms.has(roomId)) {
                     return res.json({ success: false, error: 'الغرفة غير موجودة' });
                 }
                 // لا نعدل الحالة، فقط نسمح بالدخول
@@ -67,12 +66,11 @@ export default async function handler(req, res) {
             }
             
             case 'get': {
-                const state = await kv.get(`room:${roomId}`);
+                const state = rooms.get(roomId);
                 if (!state) {
                     return res.json({ success: false, error: 'الغرفة غير موجودة' });
                 }
-                // تجديد صلاحية الغرفة كل مرة تُطلب فيها (تمنع انتهاءها أثناء اللعب)
-                await kv.expire(`room:${roomId}`, 3600);
+                // نرسل نسخة من الحالة (بدون دوال)
                 return res.json({ success: true, state: {
                     players: state.players,
                     currentTurn: state.currentTurn,
@@ -84,19 +82,18 @@ export default async function handler(req, res) {
             }
             
             case 'start': {
-                const state = await kv.get(`room:${roomId}`);
+                const state = rooms.get(roomId);
                 if (!state) return res.json({ success: false, error: 'الغرفة غير موجودة' });
                 if (!state.active) return res.json({ success: false, error: 'الجولة انتهت' });
                 if (state.players[state.currentTurn].hasPlayed) return res.json({ success: false, error: 'لعبت مسبقاً' });
                 if (state.timerRunning) return res.json({ success: false, error: 'التايمر يعمل بالفعل' });
                 state.timerRunning = true;
                 state.elapsed = 0;
-                await kv.set(`room:${roomId}`, state, { ex: 3600 });
                 return res.json({ success: true });
             }
             
             case 'stop': {
-                const state = await kv.get(`room:${roomId}`);
+                const state = rooms.get(roomId);
                 if (!state) return res.json({ success: false, error: 'الغرفة غير موجودة' });
                 if (!state.timerRunning) return res.json({ success: false, error: 'التايمر لا يعمل' });
                 if (state.players[state.currentTurn].hasPlayed) return res.json({ success: false, error: 'لعبت مسبقاً' });
@@ -107,12 +104,11 @@ export default async function handler(req, res) {
                 if (!ended) {
                     state.currentTurn = state.currentTurn === 0 ? 1 : 0;
                 }
-                await kv.set(`room:${roomId}`, state, { ex: 3600 });
                 return res.json({ success: true });
             }
             
             case 'reset': {
-                const state = await kv.get(`room:${roomId}`);
+                const state = rooms.get(roomId);
                 if (!state) return res.json({ success: false, error: 'الغرفة غير موجودة' });
                 state.active = true;
                 state.currentTurn = 0;
@@ -122,12 +118,11 @@ export default async function handler(req, res) {
                 state.players[1].hasPlayed = false;
                 state.timerRunning = false;
                 state.elapsed = 0;
-                await kv.set(`room:${roomId}`, state, { ex: 3600 });
                 return res.json({ success: true });
             }
             
             case 'next': {
-                const state = await kv.get(`room:${roomId}`);
+                const state = rooms.get(roomId);
                 if (!state) return res.json({ success: false, error: 'الغرفة غير موجودة' });
                 if (state.active) return res.json({ success: false, error: 'أنهِ الجولة الحالية أولاً' });
                 state.active = true;
@@ -139,7 +134,6 @@ export default async function handler(req, res) {
                 state.target = randomTarget();
                 state.timerRunning = false;
                 state.elapsed = 0;
-                await kv.set(`room:${roomId}`, state, { ex: 3600 });
                 return res.json({ success: true });
             }
             
@@ -150,4 +144,4 @@ export default async function handler(req, res) {
         console.error(err);
         return res.status(500).json({ error: 'خطأ داخلي في الخادم' });
     }
-                    }
+            }
