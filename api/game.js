@@ -1,10 +1,17 @@
-import { kv } from '@vercel/kv';
+// تخزين مؤقت في الذاكرة (يُفقد عند إعادة تشغيل الدالة)
+// هذا الحل مناسب للاختبار، لكنه ليس دائمًا بين عمليات النشر المتعددة
+const rooms = new Map();
 
-function randomTarget() { return Math.random() * 8 + 3; }
+function randomTarget() {
+    return Math.random() * 8 + 3; // 3.0 - 11.0
+}
 
 function newGameState(roomId) {
     return {
-        players: [{ score: 0, attempt: null, hasPlayed: false }, { score: 0, attempt: null, hasPlayed: false }],
+        players: [
+            { score: 0, attempt: null, hasPlayed: false },
+            { score: 0, attempt: null, hasPlayed: false }
+        ],
         currentTurn: 0,
         target: randomTarget(),
         active: true,
@@ -12,23 +19,6 @@ function newGameState(roomId) {
         elapsed: 0,
         createdAt: Date.now()
     };
-}
-
-async function getRoom(roomId) {
-    const key = `room:${roomId}`;
-    let room = await kv.get(key);
-    if (!room) return null;
-    // إذا مرت أكثر من ساعة دون نشاط، نعتبر الغرفة منتهية
-    if (Date.now() - room.createdAt > 3600000) {
-        await kv.del(key);
-        return null;
-    }
-    return room;
-}
-
-async function saveRoom(roomId, state) {
-    const key = `room:${roomId}`;
-    await kv.set(key, state);
 }
 
 function endRoundIfNeeded(state) {
@@ -45,90 +35,113 @@ function endRoundIfNeeded(state) {
 }
 
 export default async function handler(req, res) {
-    if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+    // السماح بـ CORS (ضروري لبعض البيئات)
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'application/json');
+    
+    if (req.method !== 'POST') {
+        return res.status(405).json({ error: 'Method not allowed' });
+    }
+    
     const { action, roomId, stopTime } = req.body;
-
+    
     try {
         switch (action) {
             case 'create': {
-                const existing = await kv.get(`room:${roomId}`);
-                if (existing) return res.json({ success: false, error: 'الغرفة موجودة بالفعل' });
-                const newRoom = newGameState(roomId);
-                await saveRoom(roomId, newRoom);
+                const { roomId: rid } = req.body;
+                if (!rid) return res.status(400).json({ error: 'roomId مطلوب' });
+                if (rooms.has(rid)) {
+                    return res.json({ success: false, error: 'الغرفة موجودة بالفعل' });
+                }
+                rooms.set(rid, newGameState(rid));
                 return res.json({ success: true });
             }
+            
             case 'join': {
-                const room = await getRoom(roomId);
-                if (!room) return res.json({ success: false, error: 'الغرفة غير موجودة' });
-                // لا نحتاج لتعديل الحالة هنا، فقط نسمح بالانضمام
+                if (!rooms.has(roomId)) {
+                    return res.json({ success: false, error: 'الغرفة غير موجودة' });
+                }
+                // لا نعدل الحالة، فقط نسمح بالدخول
                 return res.json({ success: true });
             }
+            
             case 'get': {
-                const room = await getRoom(roomId);
-                if (!room) return res.json({ success: false, error: 'الغرفة غير موجودة' });
+                const state = rooms.get(roomId);
+                if (!state) {
+                    return res.json({ success: false, error: 'الغرفة غير موجودة' });
+                }
+                // نرسل نسخة من الحالة (بدون دوال)
                 return res.json({ success: true, state: {
-                    players: room.players,
-                    currentTurn: room.currentTurn,
-                    target: room.target,
-                    active: room.active,
-                    timerRunning: room.timerRunning,
-                    elapsed: room.elapsed
+                    players: state.players,
+                    currentTurn: state.currentTurn,
+                    target: state.target,
+                    active: state.active,
+                    timerRunning: state.timerRunning,
+                    elapsed: state.elapsed
                 } });
             }
+            
             case 'start': {
-                const room = await getRoom(roomId);
-                if (!room) return res.json({ success: false, error: 'الغرفة غير موجودة' });
-                if (!room.active) return res.json({ success: false, error: 'الجولة انتهت' });
-                if (room.players[room.currentTurn].hasPlayed) return res.json({ success: false, error: 'لعبت مسبقاً' });
-                if (room.timerRunning) return res.json({ success: false, error: 'التايمر يعمل' });
-                room.timerRunning = true;
-                room.elapsed = 0;
-                await saveRoom(roomId, room);
+                const state = rooms.get(roomId);
+                if (!state) return res.json({ success: false, error: 'الغرفة غير موجودة' });
+                if (!state.active) return res.json({ success: false, error: 'الجولة انتهت' });
+                if (state.players[state.currentTurn].hasPlayed) return res.json({ success: false, error: 'لعبت مسبقاً' });
+                if (state.timerRunning) return res.json({ success: false, error: 'التايمر يعمل بالفعل' });
+                state.timerRunning = true;
+                state.elapsed = 0;
                 return res.json({ success: true });
             }
+            
             case 'stop': {
-                const room = await getRoom(roomId);
-                if (!room) return res.json({ success: false, error: 'الغرفة غير موجودة' });
-                if (!room.timerRunning) return res.json({ success: false, error: 'التايمر لا يعمل' });
-                if (room.players[room.currentTurn].hasPlayed) return res.json({ success: false, error: 'لعبت مسبقاً' });
-                room.timerRunning = false;
-                room.players[room.currentTurn].attempt = stopTime;
-                room.players[room.currentTurn].hasPlayed = true;
-                const ended = endRoundIfNeeded(room);
-                if (!ended) room.currentTurn = room.currentTurn === 0 ? 1 : 0;
-                await saveRoom(roomId, room);
+                const state = rooms.get(roomId);
+                if (!state) return res.json({ success: false, error: 'الغرفة غير موجودة' });
+                if (!state.timerRunning) return res.json({ success: false, error: 'التايمر لا يعمل' });
+                if (state.players[state.currentTurn].hasPlayed) return res.json({ success: false, error: 'لعبت مسبقاً' });
+                state.timerRunning = false;
+                state.players[state.currentTurn].attempt = stopTime;
+                state.players[state.currentTurn].hasPlayed = true;
+                const ended = endRoundIfNeeded(state);
+                if (!ended) {
+                    state.currentTurn = state.currentTurn === 0 ? 1 : 0;
+                }
                 return res.json({ success: true });
             }
+            
             case 'reset': {
-                const room = await getRoom(roomId);
-                if (!room) return res.json({ success: false, error: 'الغرفة غير موجودة' });
-                room.active = true;
-                room.currentTurn = 0;
-                room.players[0].attempt = null; room.players[0].hasPlayed = false;
-                room.players[1].attempt = null; room.players[1].hasPlayed = false;
-                room.timerRunning = false;
-                room.elapsed = 0;
-                await saveRoom(roomId, room);
+                const state = rooms.get(roomId);
+                if (!state) return res.json({ success: false, error: 'الغرفة غير موجودة' });
+                state.active = true;
+                state.currentTurn = 0;
+                state.players[0].attempt = null;
+                state.players[0].hasPlayed = false;
+                state.players[1].attempt = null;
+                state.players[1].hasPlayed = false;
+                state.timerRunning = false;
+                state.elapsed = 0;
                 return res.json({ success: true });
             }
+            
             case 'next': {
-                const room = await getRoom(roomId);
-                if (!room) return res.json({ success: false, error: 'الغرفة غير موجودة' });
-                if (room.active) return res.json({ success: false, error: 'أنهِ الجولة الحالية أولاً' });
-                room.active = true;
-                room.currentTurn = 0;
-                room.players[0].attempt = null; room.players[0].hasPlayed = false;
-                room.players[1].attempt = null; room.players[1].hasPlayed = false;
-                room.target = randomTarget();
-                room.timerRunning = false;
-                room.elapsed = 0;
-                await saveRoom(roomId, room);
+                const state = rooms.get(roomId);
+                if (!state) return res.json({ success: false, error: 'الغرفة غير موجودة' });
+                if (state.active) return res.json({ success: false, error: 'أنهِ الجولة الحالية أولاً' });
+                state.active = true;
+                state.currentTurn = 0;
+                state.players[0].attempt = null;
+                state.players[0].hasPlayed = false;
+                state.players[1].attempt = null;
+                state.players[1].hasPlayed = false;
+                state.target = randomTarget();
+                state.timerRunning = false;
+                state.elapsed = 0;
                 return res.json({ success: true });
             }
-            default: return res.status(400).json({ error: 'إجراء غير معروف' });
+            
+            default:
+                return res.status(400).json({ error: 'إجراء غير معروف' });
         }
     } catch (err) {
         console.error(err);
-        return res.status(500).json({ error: 'خطأ في الخادم' });
+        return res.status(500).json({ error: 'خطأ داخلي في الخادم' });
     }
-}
+            }
