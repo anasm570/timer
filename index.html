@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>⏱️ توقف التايمر – أونلاين</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; -webkit-tap-highlight-color: transparent; }
+        body { background: linear-gradient(145deg, #0f172a, #1e293b); min-height: 100vh; display: flex; justify-content: center; align-items: center; font-family: 'Segoe UI', 'Cairo', 'Poppins', sans-serif; padding: 15px; }
+        .game-container { max-width: 700px; width: 100%; background: rgba(0, 0, 0, 0.65); backdrop-filter: blur(12px); border-radius: 56px; padding: 24px 20px; border: 1px solid #ffcc88; }
+        h1 { text-align: center; color: #ffdd99; font-size: 1.8rem; margin-bottom: 15px; }
+        .room-panel { background: #1e293b; border-radius: 48px; padding: 15px; margin-bottom: 20px; text-align: center; }
+        .room-panel input, .room-panel button { padding: 10px; border-radius: 40px; border: none; margin: 5px; }
+        .room-panel input { background: #0f172a; color: white; width: 60%; }
+        .room-panel button { background: #2c6e4b; color: white; cursor: pointer; }
+        .room-info { font-size: 0.8rem; margin-top: 8px; color: #88aacc; }
+        .players-panel { display: flex; gap: 20px; flex-wrap: wrap; margin: 20px 0; }
+        .player-card { flex: 1; background: #1e293b; border-radius: 48px; padding: 15px; text-align: center; border: 2px solid #475569; transition: 0.1s; }
+        .player-card.active-turn { border-color: #facc15; background: #2d3a4e; box-shadow: 0 0 15px rgba(250,204,21,0.4); }
+        .player-name { font-size: 1.5rem; font-weight: bold; color: #facc15; }
+        .player-score { font-size: 2rem; font-weight: bold; color: #ffffff; margin: 8px 0; }
+        .player-attempt { font-size: 0.9rem; color: #94a3b8; }
+        .timer-area { background: #00000066; border-radius: 60px; padding: 20px; text-align: center; margin: 20px 0; }
+        .timer-display { font-size: 4rem; font-weight: bold; font-family: monospace; color: #88ffaa; text-shadow: 0 0 10px #88ffaa; }
+        .target-info { font-size: 1.1rem; color: #ffdd99; margin-top: 8px; }
+        .buttons { display: flex; gap: 15px; justify-content: center; margin: 20px 0 10px; }
+        button { background: #f97316; border: none; padding: 12px 24px; border-radius: 60px; font-weight: bold; font-size: 1rem; color: white; cursor: pointer; flex: 1; }
+        button:active { transform: scale(0.96); }
+        .stop-btn { background: #dc2626; }
+        .reset-btn { background: #3b82f6; }
+        .next-round-btn { background: #2c6e4b; }
+        .message-area { background: #00000066; border-radius: 40px; padding: 12px; text-align: center; margin: 15px 0; color: #e2e8f0; }
+        footer { text-align: center; font-size: 0.7rem; color: #88aacc; margin-top: 20px; }
+        @media (max-width: 550px) { .timer-display { font-size: 2.5rem; } .player-name { font-size: 1.2rem; } .player-score { font-size: 1.5rem; } button { padding: 8px 16px; font-size: 0.8rem; } }
+    </style>
+</head>
+<body>
+<div class="game-container">
+    <h1>⏱️ توقف التايمر <span style="font-size:0.9rem;">(أونلاين)</span></h1>
+    <div class="room-panel">
+        <div id="statusMsg">🔌 أدخل رمز الغرفة أو أنشئ واحدة</div>
+        <input type="text" id="roomIdInput" placeholder="رمز الغرفة (مثال: room123)">
+        <button id="createBtn">🆕 إنشاء غرفة</button>
+        <button id="joinBtn">🔗 انضم للغرفة</button>
+        <div id="roomInfo" class="room-info"></div>
+    </div>
+    <div class="players-panel">
+        <div class="player-card" id="p1Card"><div class="player-name">👨‍🍳 اللاعب 1</div><div class="player-score" id="p1Score">0</div><div class="player-attempt" id="p1Attempt">— ثانية</div></div>
+        <div class="player-card" id="p2Card"><div class="player-name">👩‍🍳 اللاعب 2</div><div class="player-score" id="p2Score">0</div><div class="player-attempt" id="p2Attempt">— ثانية</div></div>
+    </div>
+    <div class="timer-area"><div class="timer-display" id="timerDisplay">0.00</div><div class="target-info">🎯 الهدف: <span id="targetValue">0.00</span> ثانية</div></div>
+    <div class="buttons"><button id="startBtn" disabled>▶️ ابدأ التايمر</button><button id="stopBtn" class="stop-btn" disabled>⏹️ أوقف التايمر</button></div>
+    <div class="buttons"><button id="resetRoundBtn" class="reset-btn" disabled>🔄 إعادة الجولة</button><button id="nextRoundBtn" class="next-round-btn" disabled>⭐ الجولة التالية</button></div>
+    <div class="message-area" id="messageBox">✨ أنشئ غرفة وشارك الرمز مع صديقك ✨</div>
+    <footer>🔹 اتصال عبر الخادم | انتظر ثوانٍ بعد إنشاء الغرفة</footer>
+</div>
+<script>
+    // تأكد من أن هذا المسار صحيح (يجب أن يكون /api/game)
+    const API_URL = '/api/game';
+    let roomId = null;
+    let myPlayer = null; // 'player1' أو 'player2'
+    let pollInterval = null;
+    let localTimer = null;
+    let localRunning = false;
+    let localElapsed = 0;
+
+    // عناصر DOM
+    const p1Score = document.getElementById('p1Score');
+    const p2Score = document.getElementById('p2Score');
+    const p1Attempt = document.getElementById('p1Attempt');
+    const p2Attempt = document.getElementById('p2Attempt');
+    const p1Card = document.getElementById('p1Card');
+    const p2Card = document.getElementById('p2Card');
+    const timerDisplay = document.getElementById('timerDisplay');
+    const targetSpan = document.getElementById('targetValue');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const resetRoundBtn = document.getElementById('resetRoundBtn');
+    const nextRoundBtn = document.getElementById('nextRoundBtn');
+    const messageBox = document.getElementById('messageBox');
+    const statusMsg = document.getElementById('statusMsg');
+    const roomInfo = document.getElementById('roomInfo');
+    const roomIdInput = document.getElementById('roomIdInput');
+    const createBtn = document.getElementById('createBtn');
+    const joinBtn = document.getElementById('joinBtn');
+
+    // دالة توليد هدف عشوائي (3-11 ثانية)
+    function randomTarget() { return Math.random() * 8 + 3; }
+
+    // استدعاء API (مع رسالة خطأ واضحة)
+    async function callApi(action, data = {}) {
+        try {
+            const res = await fetch(API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action, roomId, ...data })
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return await res.json();
+        } catch (err) {
+            console.error('API error:', err);
+            messageBox.innerHTML = `❌ فشل الاتصال بالخادم: ${err.message}`;
+            return { success: false, error: err.message };
+        }
+    }
+
+    // تحديث واجهة المستخدم بناءً على حالة الخادم
+    function updateUI(state) {
+        if (!state) return;
+        p1Score.innerText = state.players[0].score;
+        p2Score.innerText = state.players[1].score;
+        p1Attempt.innerText = state.players[0].attempt !== null ? `${state.players[0].attempt.toFixed(2)} ثانية` : '— ثانية';
+        p2Attempt.innerText = state.players[1].attempt !== null ? `${state.players[1].attempt.toFixed(2)} ثانية` : '— ثانية';
+        targetSpan.innerText = state.target.toFixed(2);
+        if (!state.timerRunning) timerDisplay.innerText = state.elapsed.toFixed(2);
+        
+        // تحديث البطاقات النشطة
+        p1Card.classList.remove('active-turn');
+        p2Card.classList.remove('active-turn');
+        if (state.active && !state.players[state.currentTurn].hasPlayed) {
+            if (state.currentTurn === 0) p1Card.classList.add('active-turn');
+            else p2Card.classList.add('active-turn');
+        }
+        
+        // تحديد ما إذا كان دور اللاعب الحالي هو هذا العميل
+        const isMyTurn = (state.active && !state.players[state.currentTurn].hasPlayed &&
+                         ((myPlayer === 'player1' && state.currentTurn === 0) || (myPlayer === 'player2' && state.currentTurn === 1)));
+        startBtn.disabled = !(isMyTurn && !state.timerRunning);
+        stopBtn.disabled = !(isMyTurn && state.timerRunning);
+        resetRoundBtn.disabled = !state.active;
+        nextRoundBtn.disabled = state.active;
+        
+        // مزامنة المؤقت المحلي إذا كان هذا اللاعب هو من بدأ التايمر
+        if (state.timerRunning && !localRunning && isMyTurn) {
+            localElapsed = state.elapsed;
+            startLocalTimer();
+        } else if (!state.timerRunning && localRunning) {
+            stopLocalTimer();
+        }
+    }
+
+    function startLocalTimer() {
+        if (localTimer) clearInterval(localTimer);
+        localRunning = true;
+        localTimer = setInterval(() => {
+            if (localRunning) {
+                localElapsed += 0.01;
+                timerDisplay.innerText = localElapsed.toFixed(2);
+            }
+        }, 10);
+    }
+    function stopLocalTimer() {
+        if (localTimer) clearInterval(localTimer);
+        localTimer = null;
+        localRunning = false;
+    }
+
+    // جلب الحالة بشكل دوري
+    async function pollState() {
+        if (!roomId || !myPlayer) return;
+        const res = await callApi('get');
+        if (res.success && res.state) {
+            updateUI(res.state);
+            if (res.message) messageBox.innerHTML = res.message;
+        } else if (res.error) {
+            if (res.error.includes('غير موجودة')) {
+                stopPolling();
+                roomInfo.innerText = `⚠️ الغرفة انتهت أو لم تعد موجودة. أنشئ غرفة جديدة.`;
+                statusMsg.innerHTML = '🔌 انتهت الجلسة';
+            }
+        }
+    }
+    function startPolling() { if (pollInterval) clearInterval(pollInterval); pollInterval = setInterval(pollState, 800); }
+    function stopPolling() { if (pollInterval) clearInterval(pollInterval); pollInterval = null; }
+
+    // إنشاء غرفة
+    async function createRoom() {
+        const rid = roomIdInput.value.trim();
+        if (!rid) { alert('الرجاء إدخال رمز للغرفة'); return; }
+        const res = await callApi('create', { roomId: rid });
+        if (res.success) {
+            roomId = rid;
+            myPlayer = 'player1';
+            roomInfo.innerText = `✅ الغرفة ${roomId} (أنت المضيف - لاعب 1)`;
+            statusMsg.innerHTML = '✅ انتظر انضمام الخصم...';
+            startPolling();
+        } else {
+            alert(res.error || 'فشل إنشاء الغرفة');
+        }
+    }
+
+    // الانضمام إلى غرفة
+    async function joinRoom() {
+        const rid = roomIdInput.value.trim();
+        if (!rid) { alert('الرجاء إدخال رمز الغرفة'); return; }
+        const res = await callApi('join', { roomId: rid });
+        if (res.success) {
+            roomId = rid;
+            myPlayer = 'player2';
+            roomInfo.innerText = `✅ انضممت للغرفة ${roomId} (لاعب 2)`;
+            statusMsg.innerHTML = '✅ متصل، انتظر بدء الجولة';
+            startPolling();
+        } else {
+            alert(res.error || 'فشل الانضمام للغرفة');
+        }
+    }
+
+    async function startTurn() { const res = await callApi('start'); if (!res.success) alert(res.error); }
+    async function stopTurn() { const res = await callApi('stop', { stopTime: localElapsed }); if (!res.success) alert(res.error); }
+    async function resetRound() { await callApi('reset'); }
+    async function nextRound() { await callApi('next'); }
+
+    // ربط الأزرار
+    createBtn.onclick = createRoom;
+    joinBtn.onclick = joinRoom;
+    startBtn.onclick = startTurn;
+    stopBtn.onclick = stopTurn;
+    resetRoundBtn.onclick = resetRound;
+    nextRoundBtn.onclick = nextRound;
+</script>
+</body>
+</html>
